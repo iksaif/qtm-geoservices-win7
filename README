@@ -1,0 +1,16 @@
+Building with Visual Studio xxx Express
+=======================================
+
+Good luck with that :D.
+
+
+Building with Visutal Studio 2010
+=================================
+
+Should work out the box. (not tested)
+
+
+Building with Visual Studio 2008
+================================
+
+Edit win7.pro, and fill WINSDK correctly. You must use a Windows SDK that provides locationapi.h.
