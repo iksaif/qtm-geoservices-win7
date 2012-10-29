@@ -80,7 +80,9 @@ bool SetCoordinates(CComPtr<ILatLongReport> pLatLongReport, QGeoPositionInfo* in
     hr = pLatLongReport->GetAltitude(&altitude);
     if (!SUCCEEDED(hr))
       altitude = 0; // Altitude is not mandatory
-    qDebug() << latitude << longitude << altitude;
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "SetCoordinates:" << latitude << longitude << altitude;
+#endif
     info->setCoordinate(QGeoCoordinate(latitude, longitude, altitude));
     return true;
 }
@@ -118,7 +120,9 @@ void SetAccuracy(CComPtr<ILatLongReport> pLatLongReport, QGeoPositionInfo* info)
     hr = pLatLongReport->GetAltitudeError(&vertical_accuracy);
     if (SUCCEEDED(hr))
         info->setAttribute(QGeoPositionInfo::VerticalAccuracy, vertical_accuracy);
-    qDebug() << accuracy << vertical_accuracy;
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "SetAccuracy:" << accuracy << vertical_accuracy;
+#endif
 }
 
 void SetExtraAttributes(CComPtr<ILatLongReport> pLatLongReport, QGeoPositionInfo* info)
@@ -182,12 +186,12 @@ STDMETHODIMP QGeoLocationEventsWin7::OnLocationChanged(REFIID reportType,
     // (as opposed to IID_ICivicAddressReport or another type)
     if (IID_ILatLongReport != reportType)
         return S_OK;
-    qDebug() << "report type ok";
+
     // Get the ILatLongReport interface from ILocationReport
     hr = pLocationReport->QueryInterface(IID_PPV_ARGS(&spLatLongReport));
     if (!SUCCEEDED(hr) || spLatLongReport.p == NULL)
         return S_OK;
-    qDebug() << "latlong ok";
+
     QGeoPositionInfo info;
 
     if (!SetCoordinates(spLatLongReport, &info))
@@ -198,12 +202,10 @@ STDMETHODIMP QGeoLocationEventsWin7::OnLocationChanged(REFIID reportType,
 
 #ifdef Q_LOCATION_WIN7_DEBUG
     qDebug() << "QGeoLocationEventsWin7::positionUpdated:"
-             << info.coordinate() << info.timestamp()
-             << info.isValid()
-                << info;
+             << info;
 #endif
-    if (info.coordinate().isValid())
-        emit updateTimeout(); // TODO only do that once (or after a previous positionUpdated)
+    if (!info.isValid())
+        emit updateError();
     else
         emit positionUpdated(info);
     return S_OK;
@@ -221,7 +223,7 @@ STDMETHODIMP QGeoLocationEventsWin7::OnStatusChanged(REFIID reportType, LOCATION
     case REPORT_NOT_SUPPORTED:
     case REPORT_ERROR:
     case REPORT_ACCESS_DENIED:
-        emit updateTimeout();
+        emit updateError();  // TODO only do that once (or after a previous positionUpdated)
         break;
     }
 

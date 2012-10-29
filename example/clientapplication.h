@@ -46,6 +46,7 @@
 
 QTM_BEGIN_NAMESPACE
 class QGeoPositionInfo;
+class QGeoPositionInfoSource;
 QTM_END_NAMESPACE
 
 QT_BEGIN_NAMESPACE
@@ -61,10 +62,13 @@ public:
 
 private slots:
     void delayedInit();
+    void startUpdates();
     void positionUpdated(const QGeoPositionInfo &info);
+    void updateTimeout();
 
 private:
     QTextEdit *textEdit;
+    QGeoPositionInfoSource *source;
 };
 
 

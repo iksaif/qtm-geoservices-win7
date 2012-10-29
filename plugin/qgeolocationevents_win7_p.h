@@ -90,7 +90,7 @@ public:
     STDMETHOD(OnStatusChanged)(REFIID reportType,
                                LOCATION_REPORT_STATUS status);
 signals:
-    void updateTimeout();
+    void updateError();
     void positionUpdated(const QGeoPositionInfo& update);
 };
 

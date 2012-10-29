@@ -48,70 +48,96 @@
 #include "qgeolocationevents_win7_p.h"
 #include "qgeopositioninfosource_win7.h"
 
+/* ====== Win7 Location API ===== */
 // Make Atl happy, else CreateInstance will crash :/
 CComModule _Module;
 extern __declspec(selectany) CAtlModule* _pAtlModule=&_Module;
 
-QGeoPositionInfoSourceWin7::QGeoPositionInfoSourceWin7(QObject *parent)
-    : QGeoPositionInfoSource(parent),
-      m_timer(new QTimer(this)),
-      m_spLocation(NULL),
+class QGeoPositionInfoSourceWin7Private : public QObject
+{
+public:
+    QGeoPositionInfoSourceWin7Private(QGeoPositionInfoSourceWin7 *parent);
+    ~QGeoPositionInfoSourceWin7Private();
+
+    bool init();
+    void exit();
+    bool startUpdates(int interval);
+    bool stopUpdates();
+    bool setUpdateInterval(int interval);
+    int getUpdateInterval();
+    bool setDesiredAccuracy(bool high);
+
+private:
+    CComPtr<ILocation> m_spLocation;
+    CComObject<QGeoLocationEventsWin7>* m_pLocationEvents;
+    QGeoPositionInfoSourceWin7 *q;
+
+    friend class QGeoPositionInfoSourceWin7;
+};
+
+QGeoPositionInfoSourceWin7Private::QGeoPositionInfoSourceWin7Private(QGeoPositionInfoSourceWin7* parent)
+    : m_spLocation(NULL),
       m_pLocationEvents(NULL),
-      m_lastPositionFromSatellite(false)
+      q(parent)
 {
-    if (!initWin7LocationApi())
-        exitWin7LocationApi();
 }
 
-QGeoPositionInfoSourceWin7::~QGeoPositionInfoSourceWin7()
+QGeoPositionInfoSourceWin7Private::~QGeoPositionInfoSourceWin7Private()
 {
-    exitWin7LocationApi();
+    exit();
 }
 
-bool QGeoPositionInfoSourceWin7::initWin7LocationApi()
+bool QGeoPositionInfoSourceWin7Private::init()
 {
     HRESULT hr;
 
+    if (m_spLocation)
+        return true;
+
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7::initWin7LocationApi: creating Location";
+    qDebug() << "QGeoPositionInfoSourceWin7Private::init(): creating Location";
 #endif
 
     hr = m_spLocation.CoCreateInstance(CLSID_Location);
     if (!SUCCEEDED(hr))
-        return false;
+        goto error;
 
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7::initWin7LocationApi: creating LocationEvents";
+    qDebug() << "QGeoPositionInfoSourceWin7Private::init(): creating LocationEvents";
 #endif
 
     // Create the ILocation object that receives location reports.
     hr = CComObject<QGeoLocationEventsWin7>::CreateInstance(&m_pLocationEvents);
     if (!SUCCEEDED(hr))
-        return false;
+        goto error;
     m_pLocationEvents->AddRef();
 
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7::initWin7LocationApi: requesting permissions";
+    qDebug() << "QGeoPositionInfoSourceWin7Private::init(): requesting permissions";
 #endif
 
-    //IID reports_needed[] = { IID_ILatLongReport };
-    //hr = m_spLocation->RequestPermissions(NULL, reports_needed, 1, TRUE);
-    //if (!SUCCEEDED(hr))
-    //    return false;
+    IID reports_needed[] = { IID_ILatLongReport };
+    hr = m_spLocation->RequestPermissions(NULL, reports_needed, 1, TRUE);
+    if (!SUCCEEDED(hr))
+        goto error;
 
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7::initWin7LocationApi: connecting signals";
+    qDebug() << "QGeoPositionInfoSourceWin7Private::init(): connecting signals";
 #endif
 
-    connect(m_pLocationEvents, SIGNAL(updateTimeout()), this, SIGNAL(updateTimeout()));
-    connect(m_pLocationEvents, SIGNAL(positionUpdated(QGeoPositionInfo)), this, SIGNAL(positionUpdated(QGeoPositionInfo)));
+    // TODO: check that m_pLocationEvents really respects updateTimeout() semantics
+    connect(m_pLocationEvents, SIGNAL(updateError()), q, SLOT(reportUpdateError()));
+    connect(m_pLocationEvents, SIGNAL(positionUpdated(QGeoPositionInfo)), q, SLOT(reportPositionUpdated(QGeoPositionInfo)));
     return true;
+error:
+    exit();
+    return false;
 }
 
-void QGeoPositionInfoSourceWin7::exitWin7LocationApi()
+void QGeoPositionInfoSourceWin7Private::exit()
 {
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7::exitWin7LocationApi";
+    qDebug() << "QGeoPositionInfoSourceWin7Private::exit";
 #endif
     if (m_pLocationEvents)
         m_pLocationEvents->Release();
@@ -119,70 +145,176 @@ void QGeoPositionInfoSourceWin7::exitWin7LocationApi()
         m_spLocation.Release();
 }
 
-QGeoPositionInfo QGeoPositionInfoSourceWin7::lastKnownPosition(bool fromSatellitePositioningMethodsOnly) const
+bool QGeoPositionInfoSourceWin7Private::startUpdates(int interval)
 {
-    if (fromSatellitePositioningMethodsOnly) {
-        if (m_lastPositionFromSatellite)
-            return m_lastPosition;
-        else
-            return QGeoPositionInfo();
+    HRESULT hr;
+    int current_interval = getUpdateInterval();
+
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7Private::startUpdates(" << interval << ")";
+#endif
+
+    /* already started */
+    if (current_interval != -1) {
+        if (current_interval == interval)
+            return true;
+        return setUpdateInterval(interval);
     }
-    return m_lastPosition;
+
+    hr = m_spLocation->RegisterForReport(m_pLocationEvents, IID_ILatLongReport, interval);
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7Private pLocation->RegisterForReport"
+             << "(" << interval << ") = " << hr;
+#endif
+    return SUCCEEDED(hr);
 }
 
-void QGeoPositionInfoSourceWin7::setPreferredPositioningMethods(PositioningMethods methods)
+bool QGeoPositionInfoSourceWin7Private::stopUpdates()
+{
+    HRESULT hr = m_spLocation->UnregisterForReport(IID_ILatLongReport);
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7Private pLocation->UnregisterForReport() = " << hr;
+#endif
+    return SUCCEEDED(hr);
+}
+
+bool QGeoPositionInfoSourceWin7Private::setUpdateInterval(int interval)
+{
+    HRESULT hr = m_spLocation->SetReportInterval(IID_ILatLongReport, interval);
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7Private pLocation->SetReportInterval"
+             << "(" << interval << ") = " << hr;
+#endif
+    return SUCCEEDED(hr);
+}
+
+int QGeoPositionInfoSourceWin7Private::getUpdateInterval()
+{
+    DWORD msec = -1;
+    HRESULT hr = m_spLocation->GetReportInterval(IID_ILatLongReport, &msec);
+
+    return SUCCEEDED(hr) ? msec : -1;
+}
+
+bool QGeoPositionInfoSourceWin7Private::setDesiredAccuracy(bool high)
 {
     LOCATION_DESIRED_ACCURACY desiredAccuracy;
     HRESULT hr;
 
-    if (!m_spLocation)
-        return ;
-
-    if (methods == SatellitePositioningMethods)
+    if (high)
         desiredAccuracy = LOCATION_DESIRED_ACCURACY_HIGH;
     else
         desiredAccuracy = LOCATION_DESIRED_ACCURACY_DEFAULT;
 
     hr = m_spLocation->SetDesiredAccuracy(IID_ILatLongReport, desiredAccuracy);
 #ifdef Q_LOCATION_WIN7_DEBUG
-    qDebug() << "QGeoPositionInfoSourceWin7 requested to set methods to: " << methods;
-    qDebug() << "QGeoPositionInfoSourceWin7: pLocation->SetDesiredAccuracy("
+    qDebug() << "QGeoPositionInfoSourceWin7Private: pLocation->SetDesiredAccuracy("
              << desiredAccuracy << ") = "
              << (bool) SUCCEEDED(hr);
 #endif
+    return SUCCEEDED(hr);
+}
+
+/* ======= Qt API ====== */
+QGeoPositionInfoSourceWin7::QGeoPositionInfoSourceWin7(QObject *parent)
+    : QGeoPositionInfoSource(parent),
+      m_requestTimer(new QTimer(this)),
+      m_updateStarted(false),
+      d(new QGeoPositionInfoSourceWin7Private(this))
+{
+    m_requestTimer->setSingleShot(true);
+    connect(m_requestTimer, SIGNAL(timeout()), this, SLOT(requestUpdateTimeout()));
+}
+
+QGeoPositionInfoSourceWin7::~QGeoPositionInfoSourceWin7()
+{
+    delete d;
+}
+
+void QGeoPositionInfoSourceWin7::reportUpdateError()
+{
+    requestDone();
+    emit updateTimeout();
+}
+
+void QGeoPositionInfoSourceWin7::reportPositionUpdated(const QGeoPositionInfo& position)
+{
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7::reportPositionUpdated"
+             << position;
+#endif
+    requestDone();
+
+    if (!position.isValid())
+        return ;
+
+    if (preferredPositioningMethods() == SatellitePositioningMethods)
+        m_lastPositionFromSatellite = position;
+    else
+        m_lastPosition = position;
+
+    emit positionUpdated(position);
+}
+
+void QGeoPositionInfoSourceWin7::requestUpdateTimeout()
+{
+#ifdef Q_LOCATION_WIN7_DEBUG
+    qDebug() << "QGeoPositionInfoSourceWin7: requestUpdate timeout occurred.";
+#endif
+    // If we end up here, there has not been valid position update.
+    requestDone();
+    emit updateTimeout();
+}
+
+void QGeoPositionInfoSourceWin7::requestDone()
+{
+    if (!m_requestTimer->isActive())
+        return ;
+    if (!m_updateStarted)
+        d->stopUpdates();
+    else if (updateInterval() != d->getUpdateInterval())
+        d->setUpdateInterval(updateInterval());
+    m_requestTimer->stop();
+}
+
+QGeoPositionInfo QGeoPositionInfoSourceWin7::lastKnownPosition(bool fromSatellitePositioningMethodsOnly) const
+{
+    if (fromSatellitePositioningMethodsOnly) {
+        return m_lastPositionFromSatellite;
+    }
+    return m_lastPosition;
+}
+
+void QGeoPositionInfoSourceWin7::setPreferredPositioningMethods(PositioningMethods methods)
+{
+    if (!d->init())
+        return ;
+
+    d->setDesiredAccuracy(methods == SatellitePositioningMethods);
 }
 
 QGeoPositionInfoSourceWin7::PositioningMethods QGeoPositionInfoSourceWin7::supportedPositioningMethods() const
 {
-    if (!m_spLocation)
-        return 0;
     return AllPositioningMethods;
 }
 
 void QGeoPositionInfoSourceWin7::setUpdateInterval(int msec)
 {
-    HRESULT hr;
-
-    if (!m_spLocation) {
-        emit updateTimeout();
-        return ;
-    }
 #ifdef Q_LOCATION_WIN7_DEBUG
     qDebug() << "QGeoPositionInfoSourceWin7 called setUpdateInterval(" << msec << ")";
 #endif
+
+    if (!d->init())
+        return ;
 
     // If msec is 0 we send updates as data becomes available, otherwise we force msec to be equal
     // to or larger than the minimum update interval.
     if (msec != 0 && msec < MinimumUpdateInterval)
         msec = MinimumUpdateInterval;
-    hr = m_spLocation->SetReportInterval(IID_ILatLongReport, msec);
-
-#ifdef Q_LOCATION_WIN7_DEBUG
-    if (!SUCCEEDED(hr))
-        qDebug() << "QGeoPositionInfoSourceWin7 pLocation->SetReportInterval() call failed with result:" << hr;
-#endif
-    if (SUCCEEDED(hr))
-        QGeoPositionInfoSource::setUpdateInterval(msec);
+    if (m_updateStarted)
+        d->setUpdateInterval(msec);
+    // TODO: better error handling
+    QGeoPositionInfoSource::setUpdateInterval(msec);
 }
 
 int QGeoPositionInfoSourceWin7::minimumUpdateInterval() const
@@ -192,48 +324,51 @@ int QGeoPositionInfoSourceWin7::minimumUpdateInterval() const
 
 void QGeoPositionInfoSourceWin7::startUpdates()
 {
-    HRESULT hr;
-
-    if (!m_spLocation) {
+    if (!d->init()) {
         emit updateTimeout();
         return ;
     }
-    hr = m_spLocation->RegisterForReport(m_pLocationEvents, IID_ILatLongReport, updateInterval());
-    if (!SUCCEEDED(hr)) {
-#ifdef Q_LOCATION_WIN7_DEBUG
-        qDebug() << "QGeoPositionInfoSourceWin7 pLocation->RegisterForReport() call failed with result:" << hr;
-#endif
+
+    m_updateStarted = true;
+    if (!d->startUpdates(updateInterval())) {
+        m_updateStarted = false;
         emit updateTimeout();
+        return ;
     }
-    // TODO: use a timer for futures updateTimeout() ?
 }
 
 void QGeoPositionInfoSourceWin7::stopUpdates()
 {
-    HRESULT hr;
-
-    if (!m_spLocation)
+    // Don't stop something not started
+    if (!m_updateStarted)
         return ;
-    hr = m_spLocation->UnregisterForReport(IID_ILatLongReport);
-#ifdef Q_LOCATION_WIN7_DEBUG
-    if (!SUCCEEDED(hr))
-        qDebug() << "QGeoPositionInfoSourceWin7 pLocation->UnregisterForReport() call failed with result:" << hr;
-#endif
+
+    m_updateStarted = false;
+    if (!m_requestTimer->isActive())
+        d->stopUpdates();
 }
 
 void QGeoPositionInfoSourceWin7::requestUpdate(int timeout)
 {
-    if (m_spLocation) {
+    // Location API not available
+    if (!d->init()) {
         emit updateTimeout();
         return ;
     }
-    // A timeout of 0 means to use the default timeout, which is handled by the QGeoInfoThreadWinCE
-    // instance, otherwise if timeout is less than the minimum update interval we emit a
+
+    if (m_requestTimer->isActive())
+        return ;
+
+    // A timeout of 0 means to use the default timeout,
+    // otherwise if timeout is less than the minimum update interval we emit a
     // updateTimeout signal
     if (timeout < minimumUpdateInterval() && timeout != 0)
         emit updateTimeout();
     else {
-        //
-        // TODO infoThread->requestUpdate(timeout); // start timeout timer ?
+        // Start will only change the update interval if already started
+        m_requestTimer->start(timeout);
+        if (!m_updateStarted || timeout < d->getUpdateInterval()) {
+            d->startUpdates(timeout);
+        }
     }
 }

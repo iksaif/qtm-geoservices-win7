@@ -45,7 +45,8 @@
 #include "clientapplication.h"
 
 ClientApplication::ClientApplication(QWidget *parent)
-    : QMainWindow(parent)
+    : QMainWindow(parent),
+      source(NULL)
 {
     textEdit = new QTextEdit;
     setCentralWidget(textEdit);
@@ -54,14 +55,30 @@ ClientApplication::ClientApplication(QWidget *parent)
 
 void ClientApplication::delayedInit()
 {
-    qDebug() << "create source";
-    QGeoPositionInfoSource *source = QGeoPositionInfoSource::createSource("win7", this);
-    qDebug() << source;
+    source = QGeoPositionInfoSource::createSource("win7", this);
     connect(source, SIGNAL(positionUpdated(QGeoPositionInfo)),
             this, SLOT(positionUpdated(QGeoPositionInfo)));
-    qDebug() << "start";
-    if (source)
-        source->startUpdates();
+    connect(source, SIGNAL(updateTimeout()),
+            this, SLOT(updateTimeout()));
+
+    source->setPreferredPositioningMethods(QGeoPositionInfoSource::SatellitePositioningMethods);
+
+    if (!source)
+        return ;
+    source->requestUpdate(5000);
+    QTimer::singleShot(7000, this, SLOT(startUpdates()));
+}
+
+void ClientApplication::startUpdates()
+{
+    source->requestUpdate(1000);
+    source->startUpdates();
+    source->setUpdateInterval(2000);
+}
+
+void ClientApplication::updateTimeout()
+{
+    textEdit->append(QString("Timeout..."));
 }
 
 void ClientApplication::positionUpdated(const QGeoPositionInfo &info)

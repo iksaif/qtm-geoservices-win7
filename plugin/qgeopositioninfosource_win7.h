@@ -62,6 +62,7 @@ class QTimer;
 QT_END_NAMESPACE
 
 class QGeoLocationEventsWin7;
+class QGeoPositionInfoSourceWin7Private;
 
 class QGeoPositionInfoSourceWin7 : public QGeoPositionInfoSource
 {
@@ -72,7 +73,7 @@ public:
         MinimumUpdateInterval = 100
     };
 
-    explicit QGeoPositionInfoSourceWin7(QObject *parent = 0);
+    explicit QGeoPositionInfoSourceWin7(QObject* parent = 0);
     ~QGeoPositionInfoSourceWin7();
 
     void setUpdateInterval(int msec);
@@ -88,17 +89,18 @@ public slots:
     virtual void stopUpdates();
     virtual void requestUpdate(int timeout = 0);
 
-private:
-    bool initWin7LocationApi();
-    void exitWin7LocationApi();
+private slots:
+    void reportUpdateError();
+    void reportPositionUpdated(const QGeoPositionInfo& position);
+    void requestUpdateTimeout();
+    void requestDone();
 
 private:
-    QTimer *m_timer;
-    QGeoLocationEventsWin7 *m_events;
+    QTimer *m_requestTimer;
+    bool m_updateStarted;
     QGeoPositionInfo m_lastPosition;
-    bool m_lastPositionFromSatellite;
-    CComPtr<ILocation> m_spLocation;
-    CComObject<QGeoLocationEventsWin7>* m_pLocationEvents;
+    QGeoPositionInfo m_lastPositionFromSatellite;
+    QGeoPositionInfoSourceWin7Private *d;
 };
 
 #endif
